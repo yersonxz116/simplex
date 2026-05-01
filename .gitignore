@@ -14,6 +14,7 @@ simplex_resultado.xlsx
 # Configuracion local y secretos
 .env
 .env.*
+AGENTS.md
 
 # Herramientas y sistema
 .vscode/
