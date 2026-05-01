@@ -1,0 +1,22 @@
+# Entorno virtual
+venv/
+.venv/
+
+# Cache de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Artefactos del proyecto
+simplex_resultado.xlsx
+~$*.xlsx
+
+# Configuracion local y secretos
+.env
+.env.*
+
+# Herramientas y sistema
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
