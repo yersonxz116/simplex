@@ -30,7 +30,15 @@ pip install groq openpyxl
 
 ## Configuracion
 
-Define tu clave antes de ejecutar el programa:
+La aplicacion ahora permite escribir la API key de Groq directamente en la ventana y la guarda en este archivo local del usuario:
+
+```text
+~/.simplex_groq_solver.json
+```
+
+Eso evita depender de variables de entorno cuando cambias de Windows a Linux.
+
+Si prefieres seguir usando variable de entorno, tambien funciona:
 
 ```powershell
 $env:GROQ_API_KEY="tu_api_key"
@@ -52,9 +60,10 @@ python .\simplex_groq_solver_corregido_v2.py
 
 La aplicacion abre una interfaz donde puedes:
 
-1. Pegar el enunciado del problema.
-2. Resolverlo con Groq.
-3. Generar y guardar el archivo `simplex_resultado.xlsx`.
+1. Configurar la API key de Groq.
+2. Pegar el enunciado del problema.
+3. Resolverlo con Groq.
+4. Generar y guardar el archivo `simplex_resultado.xlsx`.
 
 ## Salida
 
@@ -79,5 +88,6 @@ Este repositorio todavia es pequeno y esta organizado alrededor de un solo scrip
 ## Notas de seguridad
 
 - No subas `GROQ_API_KEY` al repositorio.
+- No subas `~/.simplex_groq_solver.json` ni copies esa clave a archivos versionados.
 - No versionas `venv/`, archivos temporales ni salidas generadas.
 # simplex

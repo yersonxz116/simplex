@@ -3,6 +3,7 @@ import json
 import math
 import re
 import threading
+from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 
@@ -10,6 +11,9 @@ try:
     from groq import Groq
 except ImportError:
     Groq = None
+
+
+APP_CONFIG_PATH = Path.home() / ".simplex_groq_solver.json"
 
 
 @dataclass
@@ -56,6 +60,48 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
         raise
 
 
+def load_app_config() -> Dict[str, Any]:
+    if not APP_CONFIG_PATH.exists():
+        return {}
+
+    try:
+        with APP_CONFIG_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def save_app_config(data: Dict[str, Any]) -> None:
+    with APP_CONFIG_PATH.open("w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=True, indent=2)
+
+
+def get_groq_api_key() -> str:
+    env_api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if env_api_key:
+        return env_api_key
+
+    config_api_key = str(load_app_config().get("groq_api_key", "")).strip()
+    if config_api_key:
+        return config_api_key
+
+    return ""
+
+
+def set_groq_api_key(api_key: str) -> None:
+    clean_api_key = api_key.strip()
+    config = load_app_config()
+
+    if clean_api_key:
+        config["groq_api_key"] = clean_api_key
+    else:
+        config.pop("groq_api_key", None)
+
+    save_app_config(config)
+
+
 def extract_lp_with_groq(problem_text: str, model: Optional[str] = None) -> LPModel:
     """
     Usa Groq para convertir el enunciado en un modelo de programacion lineal.
@@ -67,11 +113,11 @@ def extract_lp_with_groq(problem_text: str, model: Optional[str] = None) -> LPMo
     if Groq is None:
         raise RuntimeError("Instala la libreria de Groq con: pip install groq")
 
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = get_groq_api_key()
     if not api_key:
         raise RuntimeError(
-            "Falta GROQ_API_KEY. En PowerShell usa:\n"
-            "$env:GROQ_API_KEY=\"tu_api_key\""
+            "Falta la API key de Groq. Configurala en la ventana de la aplicacion "
+            "o define GROQ_API_KEY en el sistema."
         )
 
     client = Groq(api_key=api_key)
@@ -249,6 +295,87 @@ def _linear_expression(coeffs: List[float], variables: List[str]) -> str:
     for sign, term in parts[1:]:
         expr += f" {sign} {term}"
     return expr
+
+
+def _general_model_lines(lp: LPModel) -> List[str]:
+    sentido = "MAX" if lp.objective_sense == "max" else "MIN"
+    lines = [
+        "Formulacion del modelo general:",
+        f"{sentido} Z = {_linear_expression(lp.objective_coeffs, lp.variables)}",
+        "Sujeto a:",
+    ]
+
+    for i, r in enumerate(lp.constraints, 1):
+        lines.append(f"R{i}. {_linear_expression(r.coeffs, lp.variables)} {r.sense} {_fmt_num(r.rhs)}")
+
+    lines.append(", ".join(lp.variables) + " >= 0")
+    return lines
+
+
+def _standard_model_lines(result: Dict[str, Any]) -> List[str]:
+    lp = result["lp"]
+    std = result["standard"]
+    lines = [
+        "Formulacion del modelo estandar:",
+        f"MAX Z = {_linear_expression(std['c'], std['col_names'])}",
+        "Sujeto a:",
+    ]
+
+    for i, (row, rhs) in enumerate(zip(std["A"], std["b"]), 1):
+        lines.append(f"R{i}. {_linear_expression(row, std['col_names'])} = {_fmt_num(rhs)}")
+
+    lines.append(", ".join(std["col_names"]) + " >= 0")
+    if lp.objective_sense == "min":
+        lines.append("Nota: el modelo original de minimizacion se transformo a maximizacion para resolverlo con simplex.")
+    return lines
+
+
+def _basic_nonbasic_lines(result: Dict[str, Any]) -> List[str]:
+    final_snap = result["iterations"][-1]
+    col_names = result["col_names"]
+    basic_indexes = final_snap["basis"]
+    basic_vars = [col_names[i] for i in basic_indexes]
+    nonbasic_vars = [name for j, name in enumerate(col_names) if j not in basic_indexes]
+
+    return [
+        "Variables basicas:",
+        ", ".join(basic_vars) if basic_vars else "Ninguna",
+        "",
+        "Variables no basicas:",
+        ", ".join(nonbasic_vars) if nonbasic_vars else "Ninguna",
+    ]
+
+
+def _gauss_coeff_text(value: float) -> str:
+    if abs(value) < 1e-12:
+        return "0"
+    if abs(value - 1) < 1e-12:
+        return ""
+    if abs(value + 1) < 1e-12:
+        return "-"
+    return _fmt_num(value)
+
+
+def _gauss_operation_lines(snap: Dict[str, Any]) -> List[str]:
+    if snap["status"] != "pivot":
+        return ["No se requieren operaciones adicionales."]
+
+    pivot_row = snap["leaving_row"]
+    entering = snap["entering"]
+    pivot_value = snap["pivot"]
+    pivot_coeff = _gauss_coeff_text(1 / pivot_value) or "1"
+    lines = [f"F{pivot_row + 1} = ({pivot_coeff})F{pivot_row + 1}"]
+
+    for i, row in enumerate(snap["A"]):
+        if i == pivot_row:
+            continue
+        factor = row[entering]
+        if abs(factor) < 1e-12:
+            continue
+        coeff = _gauss_coeff_text(-factor)
+        lines.append(f"F{i + 1} = ({coeff})F{pivot_row + 1} + F{i + 1}")
+
+    return lines
 
 
 def standardize(lp: LPModel, M: float = 1_000_000.0) -> Dict[str, Any]:
@@ -538,6 +665,7 @@ def export_steps_to_xlsx(result: Dict[str, Any], path: str = "simplex_resultado.
 
     title_fill = PatternFill("solid", fgColor="D9EAF7")
     header_fill = PatternFill("solid", fgColor="EAF4EA")
+    pivot_fill = PatternFill("solid", fgColor="FFF59D")
     thin = Side(style="thin", color="C9C9C9")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
@@ -566,20 +694,47 @@ def export_steps_to_xlsx(result: Dict[str, Any], path: str = "simplex_resultado.
 
     row += 1
 
+    ws.cell(row, 1, "Formulacion Modelo Estandar").font = Font(bold=True)
+    ws.cell(row, 1).fill = title_fill
+    row += 1
+
+    std = result["standard"]
+    ws.cell(row, 1, "Funcion objetivo")
+    ws.cell(row, 2, f"MAX Z = {_linear_expression(std['c'], std['col_names'])}")
+    row += 1
+
+    ws.cell(row, 1, "Restricciones")
+    row += 1
+
+    for i, (coeffs, rhs) in enumerate(zip(std["A"], std["b"]), 1):
+        ws.cell(row, 1, f"R{i}")
+        ws.cell(row, 2, f"{_linear_expression(coeffs, std['col_names'])} = {_fmt_num(rhs)}")
+        row += 1
+
+    ws.cell(row, 1, "No negatividad")
+    ws.cell(row, 2, ", ".join(std["col_names"]) + " >= 0")
+    row += 2
+
     for snap in result["iterations"]:
         ws.cell(row, 1, f"Tabla simplex - Iteracion {snap['iter']}").font = Font(bold=True)
         ws.cell(row, 1).fill = title_fill
         row += 1
 
         headers = ["Var. Basica", "Cb"] + result["col_names"] + ["b", "Razon"]
+        ops_col = len(headers) + 3
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row, col, h)
             cell.font = Font(bold=True)
             cell.fill = header_fill
             cell.border = border
             cell.alignment = Alignment(horizontal="center")
+        ops_header = ws.cell(row, ops_col, "Procedimiento Gauss")
+        ops_header.font = Font(bold=True)
+        ops_header.fill = header_fill
+        ops_header.border = border
         row += 1
 
+        table_start_row = row
         for i, vec in enumerate(snap["A"]):
             vals = [result["col_names"][snap["basis"][i]], snap["cb"][i]] + vec + [snap["b"][i]]
             if snap["ratios"]:
@@ -591,6 +746,16 @@ def export_steps_to_xlsx(result: Dict[str, Any], path: str = "simplex_resultado.
                 ws.cell(row, col, val)
                 ws.cell(row, col).border = border
             row += 1
+
+        for offset, op in enumerate(_gauss_operation_lines(snap)):
+            op_cell = ws.cell(table_start_row + offset, ops_col, op)
+            op_cell.border = border
+
+        if snap["status"] == "pivot":
+            pivot_row_excel = table_start_row + snap["leaving_row"]
+            pivot_col_excel = 3 + snap["entering"]
+            pivot_cell = ws.cell(pivot_row_excel, pivot_col_excel)
+            pivot_cell.fill = pivot_fill
 
         # Fila Zj
         ws.cell(row, 1, "Zj").font = Font(bold=True)
@@ -620,6 +785,20 @@ def export_steps_to_xlsx(result: Dict[str, Any], path: str = "simplex_resultado.
             ws.cell(row, 1, "Solucion optima: todos los Cj - Zj <= 0")
             row += 2
 
+    final_basis = result["iterations"][-1]["basis"]
+    basic_vars = [result["col_names"][i] for i in final_basis]
+    nonbasic_vars = [name for j, name in enumerate(result["col_names"]) if j not in final_basis]
+
+    ws.cell(row, 1, "Variables basicas").font = Font(bold=True)
+    ws.cell(row, 1).fill = title_fill
+    ws.cell(row, 2, ", ".join(basic_vars) if basic_vars else "Ninguna")
+    row += 1
+
+    ws.cell(row, 1, "Variables no basicas").font = Font(bold=True)
+    ws.cell(row, 1).fill = title_fill
+    ws.cell(row, 2, ", ".join(nonbasic_vars) if nonbasic_vars else "Ninguna")
+    row += 2
+
     ws.cell(row, 1, "Solucion optima").font = Font(bold=True, size=12)
     ws.cell(row, 1).fill = title_fill
     row += 1
@@ -644,14 +823,14 @@ def _format_result_summary(result: Dict[str, Any], excel_path: Optional[str] = N
     lp = result["lp"]
     lines = [
         f"Problema: {lp.problem_name}",
-        f"Objetivo: {lp.objective_sense.upper()} Z = {_linear_expression(lp.objective_coeffs, lp.variables)}",
         "",
-        "Restricciones:",
     ]
 
-    for i, r in enumerate(lp.constraints, 1):
-        lines.append(f"R{i}. {_linear_expression(r.coeffs, lp.variables)} {r.sense} {_fmt_num(r.rhs)} ({r.name})")
-
+    lines.extend(_general_model_lines(lp))
+    lines.extend([""])
+    lines.extend(_standard_model_lines(result))
+    lines.extend([""])
+    lines.extend(_basic_nonbasic_lines(result))
     lines.extend(["", "Solucion optima:"])
     for v, val in result["solution"].items():
         lines.append(f"{v} = {_fmt_num(val)}")
@@ -676,8 +855,8 @@ def run_gui():
     result_state = {"result": None, "excel_path": None}
 
     root.columnconfigure(0, weight=1)
-    root.rowconfigure(1, weight=1)
-    root.rowconfigure(3, weight=1)
+    root.rowconfigure(2, weight=1)
+    root.rowconfigure(4, weight=1)
 
     header = ttk.Frame(root, padding=(14, 12, 14, 6))
     header.grid(row=0, column=0, sticky="ew")
@@ -689,8 +868,62 @@ def run_gui():
         text="Pega el enunciado del problema, resuelvelo y guarda el Excel con las tablas.",
     ).grid(row=1, column=0, sticky="w", pady=(3, 0))
 
+    config_frame = ttk.LabelFrame(root, text="Configuracion de Groq", padding=10)
+    config_frame.grid(row=1, column=0, sticky="ew", padx=14, pady=(8, 4))
+    config_frame.columnconfigure(1, weight=1)
+
+    api_key_var = tk.StringVar(value=get_groq_api_key())
+    api_key_status_var = tk.StringVar()
+    show_api_key_var = tk.BooleanVar(value=False)
+
+    ttk.Label(config_frame, text="API key").grid(row=0, column=0, sticky="w", padx=(0, 8))
+    api_key_entry = ttk.Entry(config_frame, textvariable=api_key_var, show="*", width=60)
+    api_key_entry.grid(row=0, column=1, sticky="ew")
+
+    def toggle_api_key_visibility():
+        api_key_entry.configure(show="" if show_api_key_var.get() else "*")
+
+    ttk.Checkbutton(
+        config_frame,
+        text="Mostrar",
+        variable=show_api_key_var,
+        command=toggle_api_key_visibility,
+    ).grid(row=0, column=2, padx=8)
+
+    def persist_api_key(show_success: bool = True) -> bool:
+        api_key = api_key_var.get().strip()
+        if not api_key:
+            api_key_status_var.set("Ingresa una API key valida.")
+            if show_success:
+                messagebox.showwarning("Falta la API key", "Escribe la API key de Groq antes de guardarla.")
+            return False
+
+        try:
+            set_groq_api_key(api_key)
+        except Exception as exc:
+            api_key_status_var.set("No se pudo guardar la API key.")
+            if show_success:
+                messagebox.showerror("Error al guardar", str(exc))
+            return False
+
+        api_key_status_var.set(f"API key guardada en {APP_CONFIG_PATH}")
+        if show_success:
+            messagebox.showinfo("Configuracion guardada", "La API key de Groq quedo guardada en este equipo.")
+        return True
+
+    ttk.Button(config_frame, text="Guardar API key", command=persist_api_key).grid(row=0, column=3, padx=(8, 0))
+    ttk.Label(
+        config_frame,
+        text="Si existe GROQ_API_KEY en el sistema, esa prioridad se mantiene sobre la guardada aqui.",
+    ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
+    ttk.Label(config_frame, textvariable=api_key_status_var).grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+    api_key_status_var.set(
+        f"API key cargada desde {APP_CONFIG_PATH}" if api_key_var.get().strip() else "Aun no hay una API key guardada."
+    )
+
     input_frame = ttk.LabelFrame(root, text="Enunciado del problema", padding=10)
-    input_frame.grid(row=1, column=0, sticky="nsew", padx=14, pady=8)
+    input_frame.grid(row=2, column=0, sticky="nsew", padx=14, pady=8)
     input_frame.columnconfigure(0, weight=1)
     input_frame.rowconfigure(0, weight=1)
 
@@ -698,7 +931,7 @@ def run_gui():
     problem_text.grid(row=0, column=0, sticky="nsew")
 
     actions = ttk.Frame(root, padding=(14, 4, 14, 4))
-    actions.grid(row=2, column=0, sticky="ew")
+    actions.grid(row=3, column=0, sticky="ew")
     actions.columnconfigure(2, weight=1)
 
     status_var = tk.StringVar(value="Listo")
@@ -712,7 +945,7 @@ def run_gui():
     ttk.Label(actions, textvariable=status_var).grid(row=0, column=3, sticky="e")
 
     output_frame = ttk.LabelFrame(root, text="Resultado", padding=10)
-    output_frame.grid(row=3, column=0, sticky="nsew", padx=14, pady=(8, 14))
+    output_frame.grid(row=4, column=0, sticky="nsew", padx=14, pady=(8, 14))
     output_frame.columnconfigure(0, weight=1)
     output_frame.rowconfigure(0, weight=1)
 
@@ -763,6 +996,11 @@ def run_gui():
         if not text:
             messagebox.showwarning("Falta el enunciado", "Escribe o pega el problema antes de resolver.")
             return
+
+        if not get_groq_api_key():
+            if not persist_api_key(show_success=False):
+                messagebox.showwarning("Falta la API key", "Configura la API key de Groq antes de resolver.")
+                return
 
         set_busy(True)
         status_var.set("Resolviendo con Groq...")
