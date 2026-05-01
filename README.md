@@ -1,17 +1,32 @@
 # Solver Simplex con Groq
 
-Aplicacion en Python para resolver problemas de programacion lineal con el metodo simplex a partir de un enunciado en espanol. El script usa Groq para extraer el modelo, ejecuta el proceso simplex y exporta las tablas del procedimiento a un archivo Excel.
+Aplicacion de escritorio en Python para convertir un enunciado en espanol en un modelo de programacion lineal, resolverlo con el metodo simplex y exportar el procedimiento completo a Excel.
 
-## Contenido del proyecto
+## Funciones actuales
 
-- `simplex_groq_solver_corregido_v2.py`: script principal con interfaz grafica, extraccion del modelo, resolucion simplex y exportacion a Excel.
-- `AGENTS.md`: guia local de trabajo para este directorio.
-- `simplex_resultado.xlsx`: archivo generado por la aplicacion. No forma parte del codigo fuente.
+- Interfaz grafica con `tkinter`.
+- Captura del enunciado del problema en lenguaje natural.
+- Extraccion del modelo lineal usando Groq.
+- Estandarizacion del modelo con variables de holgura, excedente y artificiales.
+- Resolucion por metodo simplex con registro de iteraciones.
+- Resumen en pantalla con:
+  - formulacion del modelo general,
+  - formulacion del modelo estandar,
+  - variables basicas y no basicas,
+  - solucion optima y valor de `Z`.
+- Exportacion a `simplex_resultado.xlsx` o a una ruta elegida por el usuario.
+- Guardado local de la API key en `~/.simplex_groq_solver.json`.
+
+## Estructura del proyecto
+
+- `simplex_groq_solver_corregido_v2.py`: script principal con UI, integracion con Groq, simplex y exportacion a Excel.
+- `requirements.txt`: dependencias del proyecto.
+- `simplex_resultado.xlsx`: archivo generado por la aplicacion.
 
 ## Requisitos
 
-- Python 3.13
-- Una API key de Groq
+- Python 3.13 o compatible
+- API key de Groq
 
 Dependencias:
 
@@ -20,74 +35,78 @@ Dependencias:
 
 ## Instalacion
 
-En PowerShell:
+En Linux o macOS:
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+En Windows PowerShell:
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-pip install groq openpyxl
+pip install -r requirements.txt
 ```
 
 ## Configuracion
 
-La aplicacion ahora permite escribir la API key de Groq directamente en la ventana y la guarda en este archivo local del usuario:
+Puedes escribir la API key directamente en la ventana y guardarla desde la aplicacion. Tambien puedes usar variables de entorno:
 
-```text
-~/.simplex_groq_solver.json
+```bash
+export GROQ_API_KEY="tu_api_key"
+export GROQ_MODEL="llama-3.3-70b-versatile"
 ```
 
-Eso evita depender de variables de entorno cuando cambias de Windows a Linux.
-
-Si prefieres seguir usando variable de entorno, tambien funciona:
+En Windows PowerShell:
 
 ```powershell
 $env:GROQ_API_KEY="tu_api_key"
-```
-
-Opcionalmente puedes cambiar el modelo:
-
-```powershell
 $env:GROQ_MODEL="llama-3.3-70b-versatile"
 ```
 
+Si existe `GROQ_API_KEY` en el sistema, esa clave tiene prioridad sobre la guardada localmente.
+
 ## Uso
 
-Ejecuta el script principal:
+Ejecuta la aplicacion:
 
-```powershell
-python .\simplex_groq_solver_corregido_v2.py
+```bash
+python simplex_groq_solver_corregido_v2.py
 ```
 
-La aplicacion abre una interfaz donde puedes:
+Flujo de trabajo:
 
-1. Configurar la API key de Groq.
-2. Pegar el enunciado del problema.
-3. Resolverlo con Groq.
-4. Generar y guardar el archivo `simplex_resultado.xlsx`.
+1. Guarda la API key de Groq si aun no esta configurada.
+2. Pega el enunciado del problema.
+3. Pulsa `Resolver y generar Excel`.
+4. Revisa el resumen en pantalla.
+5. Usa `Descargar Excel` para guardar una copia en la ruta que elijas.
 
 ## Salida
 
-El programa genera un Excel con:
+El Excel generado incluye:
 
-- El modelo lineal extraido.
-- Las tablas del metodo simplex por iteracion.
-- La solucion optima encontrada.
+- modelo general,
+- modelo estandar,
+- tablas simplex por iteracion,
+- operaciones de Gauss,
+- pivote resaltado,
+- variables basicas y no basicas,
+- solucion optima final.
 
 ## Verificacion rapida
 
-Para validar sintaxis del script:
+Para validar sintaxis:
 
-```powershell
-python -m py_compile .\simplex_groq_solver_corregido_v2.py
+```bash
+python -m py_compile simplex_groq_solver_corregido_v2.py
 ```
 
-## Estructura actual
+## Notas
 
-Este repositorio todavia es pequeno y esta organizado alrededor de un solo script. Si el proyecto crece, conviene mover la logica reutilizable a `src/` y las pruebas a `tests/`.
-
-## Notas de seguridad
-
-- No subas `GROQ_API_KEY` al repositorio.
-- No subas `~/.simplex_groq_solver.json` ni copies esa clave a archivos versionados.
-- No versionas `venv/`, archivos temporales ni salidas generadas.
-# simplex
+- La aplicacion puede fallar si falta la API key o si Groq devuelve un modelo invalido.
+- El solver detecta problemas no acotados e infactibles y muestra el error en pantalla.
+- No subas claves, archivos `.env` ni `~/.simplex_groq_solver.json` al repositorio.
